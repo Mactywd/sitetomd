@@ -4,68 +4,56 @@ Generate the Directus schema and snapshot for a new property onboarding.
 
 Ask the user for the property identifier if not already given (e.g. `villa_rossi`). This will be used as `{name}` throughout. It must be lowercase snake_case.
 
-## Step 2 — Read all sources
+## Step 2 — Check sources
 
-Read every available source file:
-- `website/exported.md` — full scraped website content
-- Every file inside `information/` — internal documents (PDFs, DOCX, QnA, pricing, etc.)
+- Verify `website/exported.md` exists. If not, stop and ask the user to run `python website/main.py` first.
+- Check whether `information/` contains any files (do not read them yet — just list).
 
-If `website/exported.md` does not exist, warn the user and ask them to run `website/main.py` first.
+## Step 3 — Extract data via sub-agent
 
-## Step 3 — Generate schema.json
+Spawn a **general-purpose sub-agent** with the following task:
 
-Analyze all source content and extract structured data. Produce `output/schema.json` (create the `output/` directory if it doesn't exist).
+> You are generating a Directus onboarding schema for the property **{name}**.
+>
+> Read every source file:
+> - `website/exported.md` — full scraped website
+> - Every file inside `information/` (if any exist)
+>
+> Follow CLAUDE.md strictly for all field naming, type mapping, and output formats.
+>
+> Produce two output files:
+>
+> **`output/schema.json`** — all structured property data. Rules:
+> - 4 top-level keys: the unit collection key (`apartments` or `rooms`), `experiences`, `services`, `{name}`
+> - Extract every distinct unit, experience, and service mentioned in the sources
+> - Merge all sources (internal docs take priority over website for accuracy)
+> - Use `null` for missing values; all items in a collection must share identical field sets
+> - `{name}` is a singleton array with one object capturing all property-level info
+>
+> **`output/snapshot_input.json`** — minimal field descriptor for `to_snapshot.py`. Rules:
+> - `id` and `additional_info` are added automatically — do not include them
+> - Include every field present in schema.json
+> - Use `select-dropdown` + `choices` for any categorical field with a fixed enum
+> - Do NOT read `examples/schema_eg.json` or `examples/snapshot_eg.json` — the type tables in CLAUDE.md are sufficient
+>
+> Return a brief summary: unit_collection choice, apartment/room count, experience count, service count, field counts per collection.
 
-Rules:
-- Extract every distinct apartment, experience, and service mentioned across all sources
-- Merge information from multiple sources (website + internal docs) — internal docs take priority for accuracy
-- Field names must be `snake_case`, prefixed with entity type (`apartment_*`, `experience_*`, `service_*`, `property_*`)
-- Use `null` for missing values, never omit a field that exists on other items in the same collection
-- The main singleton object (`{name}`) captures property-level info: name, type, description, location, directions, distances, etc.
-- `additional_info` should consolidate any notable details not captured by other fields
-- All items in the same collection must have identical field sets (no sparse fields)
-- Refer to `examples/schema_eg.json` for the expected format and field granularity
+Wait for the sub-agent to complete before continuing.
 
-Output format:
-```json
-[
-  { "apartments": [ ... ] },
-  { "experiences": [ ... ] },
-  { "services": [ ... ] },
-  { "{name}": [ ... ] }
-]
+## Step 4 — Compile snapshot
+
+Run:
+```bash
+python to_snapshot.py
 ```
 
-## Step 4 — Generate snapshot.json
-
-Derive the Directus snapshot from `output/schema.json`. Produce `output/snapshot.json`.
-
-Rules:
-- Use exactly the 4-collection structure defined in CLAUDE.md
-- For each field in the schema, create a field entry following the type mapping table in CLAUDE.md
-- Each collection always starts with an `id` field (uuid, hidden, readonly, sort: 1)
-- Field `sort` values are sequential starting from 1; `id` is always 1
-- Determine field type by inspecting the actual values in schema.json:
-  - Boolean → `boolean`
-  - Integer number → `integer`
-  - Long string (descriptions, notes) → `text`
-  - Short string (names, categories, URLs) → `string`
-  - Object or array → `json`
-- Refer to `examples/snapshot_eg.json` for the exact field/collection meta structure and boilerplate
-
-## Step 5 — Verify
-
-After writing both files:
-1. Confirm `output/schema.json` has all 4 top-level keys and no collection is empty
-2. Confirm `output/snapshot.json` has exactly 4 collections and that every field in schema.json has a corresponding field entry in the snapshot
-3. Confirm field counts match between schema and snapshot (excluding `id`)
-4. Report a summary: property name, apartment count, experience count, service count, total snapshot fields
-
-## Step 6 — Upload to Directus
+## Step 5 — Upload to Directus
 
 Run:
 ```bash
 python upload.py
 ```
 
-Report the output to the user. If it succeeds, confirm that both the schema (collections/fields) and data (items) have been uploaded.
+## Step 6 — Report to user
+
+Report the sub-agent's summary plus the upload output. Confirm both schema (collections/fields) and data (items) were uploaded.

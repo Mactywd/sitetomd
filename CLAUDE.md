@@ -7,29 +7,38 @@ Generate Directus-ready collection snapshots and data schemas from scraped websi
 ```
 website/exported.md     ← full website scraped as markdown (run website/main.py)
 information/            ← internal docs: PDFs, DOCX, QnA files, pricing, wifi passwords, etc.
-examples/snapshot_eg.json  ← reference: Directus snapshot format
-examples/schema_eg.json    ← reference: data schema format
 ```
 
 Output files to produce (in `output/` directory, create it if missing):
 - `output/schema.json` — extracted structured data
-- `output/snapshot.json` — Directus collection + field definitions
+- `output/snapshot_input.json` — minimal field descriptor (written by the LLM)
+- `output/snapshot.json` — full Directus snapshot (compiled by `to_snapshot.py`)
+
+**Do not write `output/snapshot.json` by hand.** Write `output/snapshot_input.json` instead, then run:
+```
+python to_snapshot.py
+```
 
 ## Fixed 4-collection model
 
-Every property uses exactly these collections, where `{name}` is the lowercase snake_case property identifier (e.g. `chiusella`, `villa_rossi`):
+Every property uses exactly these collections, where `{name}` is the lowercase snake_case property identifier (e.g. `chiusella`, `villa_rossi`) and `{units}` is either `apartments` or `rooms` (see rule below):
 
 | Collection | Type | Group | Sort |
 |---|---|---|---|
 | `{name}` | singleton | none | 1 |
-| `{name}_apartments` | list | `{name}` | 1 |
+| `{name}_{units}` | list | `{name}` | 1 |
 | `{name}_experiences` | list | `{name}` | 2 |
 | `{name}_services` | list | `{name}` | 3 |
+
+**apartments vs rooms:** inspect the website content to decide.
+- Use `rooms` when the property sells individual rooms that share common areas (B&B, hotel, hostel, agriturismo with shared kitchen, etc.).
+- Use `apartments` when the property sells self-contained units with their own facilities (holiday apartments, villas, agriturismo with independent units, etc.).
+- When in doubt, prefer `rooms` for accommodation-focused properties and `apartments` for rental-focused ones.
 
 ## Field naming conventions
 
 - All field names: `snake_case`
-- Prefix fields with their entity type: `apartment_*`, `experience_*`, `service_*`
+- Prefix fields with their entity type: `apartment_*` (or `room_*`), `experience_*`, `service_*`
 - Main singleton fields: `property_*`
 - Every collection includes `id` (uuid, hidden, readonly) as field sort 1
 - Always include `additional_info` (text, nullable) as the last field in child collections
@@ -126,6 +135,48 @@ Choose the interface based on what makes most sense for an editor using the Dire
 ]
 ```
 
+(Use `"rooms"` instead of `"apartments"` as the key when appropriate.)
+
+## snapshot_input.json format
+
+This is the minimal input for `to_snapshot.py`. It compiles into the full `output/snapshot.json`.
+
+```json
+{
+  "name": "{name}",
+  "unit_collection": "apartments",
+  "property": [
+    {"field": "property_name", "type": "string"},
+    {"field": "property_description", "type": "text"}
+  ],
+  "units": [
+    {"field": "apartment_name", "type": "string"},
+    {"field": "apartment_has_wifi", "type": "boolean"},
+    {"field": "apartment_kitchen_type", "type": "string",
+     "interface": "select-dropdown",
+     "choices": ["Kitchenette", "Full kitchen", "None"]}
+  ],
+  "experiences": [
+    {"field": "experience_name", "type": "string"}
+  ],
+  "services": [
+    {"field": "service_name", "type": "string"}
+  ]
+}
+```
+
+Rules for `snapshot_input.json`:
+- `id` is added automatically to every collection — do not include it.
+- `additional_info` is added automatically at the end of every child collection — do not include it.
+- Per-field keys: `field` (required), `type` (required), `interface` (optional override), `choices` (optional, for dropdowns).
+- Valid types: `string`, `text`, `integer`, `float`, `boolean`, `datetime`, `json`, `image`, `file`.
+- For a `select-dropdown`, add `"interface": "select-dropdown"` and `"choices": [...]`.
+- For a `select-multiple-dropdown`, use `"type": "json"`, `"interface": "select-multiple-dropdown"`, and `"choices": [...]`.
+
 ## Generation order
 
-Always generate **schema first**, then derive the snapshot from it. The schema tells you which fields exist and what types they are; the snapshot is the mechanical translation of those fields into Directus format.
+1. Generate `output/schema.json` first (structured property data).
+2. Generate `output/snapshot_input.json` (minimal field descriptor — ~50–80 lines).
+3. Run `python to_snapshot.py` to compile `output/snapshot.json`.
+
+The schema tells you which fields exist; `snapshot_input.json` is the mechanical description of those fields; `to_snapshot.py` handles all Directus boilerplate.
